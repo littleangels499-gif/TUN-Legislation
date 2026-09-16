@@ -25,7 +25,7 @@ const { findTemplate, findResolution, getAllResolutions, getAllTemplates, upsert
 const { nextResolutionNumber } = require('./lib/numbering');
 const { resolutionEmbed, amendmentEmbed } = require('./lib/embeds');
 const { logAudit, notify, dmUser } = require('./lib/audit');
-const { refreshTrackMessage, castVeto, postToReviewChannels, getDebateTargetChannelIds } = require('./lib/voting');
+const { refreshTrackMessage, castVeto, removeVeto, postToReviewChannels, getDebateTargetChannelIds } = require('./lib/voting');
 const {
   AMENDMENT_TYPE_LABELS,
   AMENDMENT_TYPE_MODAL_CONFIG,
@@ -657,6 +657,25 @@ client.on('interactionCreate', async (interaction) => {
           error: '❌ Something went wrong recording your veto. Please try again or use `/veto cast`.',
         };
         return interaction.editReply({ content: messages[result.status] || '🚫 Your veto has been cast.' });
+      }
+
+      // --- Retract Veto button ---
+      if (choice === 'retract-veto') {
+        if (!isSCPermanentMember(interaction.member, config)) {
+          return interaction.reply({ content: '❌ Only Permanent Security Council Members may retract a veto.', ephemeral: true });
+        }
+        await interaction.deferReply({ ephemeral: true });
+        const result = await removeVeto(client, resolution, interaction.member).catch((err) => {
+          console.error('Failed to process veto retraction:', err);
+          return { status: 'error' };
+        });
+        const messages = {
+          removed: `✅ Your veto on **${resolution.number}** has been retracted (${result.count}/${result.required} Permanent Members now).`,
+          not_found: `You have not cast a veto on **${resolution.number}**.`,
+          closed: '❌ This vote has already closed — the veto can no longer be retracted.',
+          error: '❌ Something went wrong retracting your veto. Please try again or use `/veto retract`.',
+        };
+        return interaction.editReply({ content: messages[result.status] || '✅ Your veto has been retracted.' });
       }
 
       // --- Yes / No / Abstain ---

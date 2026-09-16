@@ -9,7 +9,7 @@ const { getConfig } = require('../lib/config');
 const { isAdmin, isSCPermanentMember } = require('../lib/permissions');
 const { findResolution } = require('../lib/resolutions');
 const { resolutionEmbed } = require('../lib/embeds');
-const { castVeto, openOverrideVote, closeOverrideVote } = require('../lib/voting');
+const { castVeto, removeVeto, openOverrideVote, closeOverrideVote } = require('../lib/voting');
 
 module.exports = {
   category: 'Security Council',
@@ -22,6 +22,12 @@ module.exports = {
         .setDescription('Cast a veto on a resolution currently being voted on by the Security Council')
         .addStringOption((o) => o.setName('number').setDescription('Resolution number').setRequired(true).setAutocomplete(true))
         .addStringOption((o) => o.setName('reason').setDescription('Reason for the veto (optional)').setRequired(false))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('retract')
+        .setDescription('Retract a veto you previously cast on a resolution')
+        .addStringOption((o) => o.setName('number').setDescription('Resolution number').setRequired(true).setAutocomplete(true))
     )
     .addSubcommand((sub) =>
       sub
@@ -73,6 +79,21 @@ module.exports = {
         closed: '❌ There is no open Security Council vote on this resolution.',
       };
       return interaction.editReply({ content: messages[result.status] || '🚫 Your veto has been cast.' });
+    }
+
+    if (sub === 'retract') {
+      if (!isSCPermanentMember(interaction.member, config)) {
+        return interaction.reply({ content: '❌ Only Permanent Security Council Members may retract a veto.', ephemeral: true });
+      }
+      await interaction.deferReply({ ephemeral: true });
+      const result = await removeVeto(interaction.client, resolution, interaction.member);
+
+      const messages = {
+        removed: `✅ Your veto on **${resolution.number}** has been retracted (${result.count}/${result.required} Permanent Members now).`,
+        not_found: `You have not cast a veto on **${resolution.number}**.`,
+        closed: '❌ This vote has already closed — the veto can no longer be retracted.',
+      };
+      return interaction.editReply({ content: messages[result.status] || '✅ Your veto has been retracted.' });
     }
 
     if (sub === 'status') {

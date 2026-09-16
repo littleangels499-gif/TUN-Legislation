@@ -233,7 +233,8 @@ function buildVoteButtons(number, body, disabled = false, includeVeto = false) {
   ];
   if (includeVeto) {
     buttons.push(
-      new ButtonBuilder().setCustomId(`vote_${body}_veto_${number}`).setLabel('Veto').setEmoji('🚫').setStyle(ButtonStyle.Danger).setDisabled(disabled)
+      new ButtonBuilder().setCustomId(`vote_${body}_veto_${number}`).setLabel('Veto').setEmoji('🚫').setStyle(ButtonStyle.Danger).setDisabled(disabled),
+      new ButtonBuilder().setCustomId(`vote_${body}_retract-veto_${number}`).setLabel('Retract Veto').setEmoji('🔓').setStyle(ButtonStyle.Secondary).setDisabled(disabled)
     );
   }
   return new ActionRowBuilder().addComponents(buttons);
@@ -553,6 +554,36 @@ async function castVeto(client, resolution, member, reason) {
   return { status: 'vetoed', count, required };
 }
 
+// Lets whoever cast a veto take it back, as long as the track hasn't
+// closed yet. This works even after the required threshold was reached,
+// as long as the track is still open (e.g. because immediatelyTerminates
+// is off) - pulling a veto back below the threshold simply un-vetoes it,
+// same as if it had never reached the threshold in the first place.
+// Returns { status: 'removed' | 'not_found' | 'closed', count, required }
+async function removeVeto(client, resolution, member) {
+  const config = getConfig();
+  const track = resolution.tracks.SC;
+  if (!track || track.closed) return { status: 'closed' };
+
+  const required = track.vetoRequiredCount || config.securityCouncil.veto.requiredVetoes || 3;
+  const idx = track.vetoes.findIndex((v) => v.id === member.id);
+  if (idx === -1) return { status: 'not_found', count: track.vetoes.length, required };
+
+  track.vetoes.splice(idx, 1);
+  const count = track.vetoes.length;
+  upsertResolution(resolution);
+  await refreshTrackMessage(client, resolution, 'SC');
+
+  await logAudit(
+    client,
+    'Veto Retracted',
+    `**${resolution.number}** — Veto retracted by ${member.user ? member.user.tag : member.tag} (${count}/${required} Permanent Members now)`,
+    resolution.body
+  );
+
+  return { status: 'removed', count, required };
+}
+
 async function openOverrideVote(client, resolution) {
   const config = getConfig();
   if (resolution.status !== 'Vetoed') throw new Error('This resolution is not currently vetoed.');
@@ -609,6 +640,7 @@ module.exports = {
   openVoting,
   closeVoting,
   castVeto,
+  removeVeto,
   isVetoThresholdMet,
   openOverrideVote,
   closeOverrideVote,

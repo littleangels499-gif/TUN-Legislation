@@ -252,6 +252,18 @@ function trackEmbed(resolution, body, track) {
       { name: '❌ NO', value: `${rawNo} raw  ·  **${weightedNo}** weighted  ·  **${noPercent}%**`, inline: false },
       { name: '⚪ ABSTAIN', value: `${rawAbstain} raw  ·  **${weightedAbstain}** weighted  ·  **${abstainPercent}%**`, inline: false }
     );
+  } else if (track.closed) {
+    // Same reasoning as the final resolution result: once this vote is
+    // closed, the final For/Against/Abstain percentages are shown even on
+    // an anonymous vote - only the exact (weighted) counts behind them,
+    // which in a small body can be enough to deduce an individual's vote,
+    // stay hidden.
+    embed.addFields(
+      { name: '✅ YES', value: `**${yesPercent}%**`, inline: true },
+      { name: '❌ NO', value: `**${noPercent}%**`, inline: true },
+      { name: '⚪ ABSTAIN', value: `**${abstainPercent}%**`, inline: true },
+      { name: BLANK, value: '*Anonymous vote — exact vote counts not disclosed.*', inline: false }
+    );
   } else {
     embed.addFields({
       name: BLANK,
