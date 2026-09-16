@@ -139,21 +139,30 @@ function resolutionEmbed(resolution) {
         const icon = STATUS_ICONS[track.result] || '⚪';
         let value = `${icon} **${(track.result || '').toUpperCase()}**`;
         if (track.tally) {
+          // The FINAL For/Against/Abstain percentages are always shown, even
+          // on an anonymous vote - they're an aggregate result, not a way to
+          // identify who voted which way. What anonymity still hides here is
+          // the exact (weighted) counts behind those percentages, which in a
+          // small body can be enough to deduce an individual's vote.
           value += showBreakdown
             ? `\nFor **${track.tally.weightedYes}** (${track.tally.forPercent.toFixed(1)}%)  ·  Against **${track.tally.weightedNo}** (${track.tally.againstPercent.toFixed(1)}%)  ·  Abstain **${track.tally.weightedAbstain}** (${track.tally.abstainPercent.toFixed(1)}%)\nParticipation **${track.tally.participation.toFixed(1)}%**`
-            : `\nParticipation **${track.tally.participation.toFixed(1)}%** *(anonymous vote - breakdown not disclosed)*`;
+            : `\nFor **${track.tally.forPercent.toFixed(1)}%**  ·  Against **${track.tally.againstPercent.toFixed(1)}%**  ·  Abstain **${track.tally.abstainPercent.toFixed(1)}%**\nParticipation **${track.tally.participation.toFixed(1)}%** *(anonymous vote - exact vote counts not disclosed)*`;
         }
         embed.addFields({ name: `${track.label.toUpperCase()} — VOTE RESULT`, value, inline: false });
       }
     }
   }
 
-  // Veto details, if this resolution was vetoed.
+  // Veto details, if this resolution was vetoed. Tolerates old archived
+  // resolutions that still have the legacy single `vetoedBy` object instead
+  // of the current `vetoes` array.
   const scTrack = resolution.tracks && resolution.tracks.SC;
-  if (scTrack && scTrack.vetoedBy) {
+  const vetoList = scTrack ? scTrack.vetoes || (scTrack.vetoedBy ? [scTrack.vetoedBy] : []) : [];
+  if (vetoList.length) {
+    const lines = vetoList.map((v) => `<@${v.id}>${v.reason ? ` — ${quoteBlock(v.reason)}` : ''}  ·  <t:${Math.floor(v.timestamp / 1000)}:f>`);
     embed.addFields({
-      name: '🚫 VETOED',
-      value: `By <@${scTrack.vetoedBy.id}>  ·  <t:${Math.floor(scTrack.vetoedBy.timestamp / 1000)}:f>\n${quoteBlock(scTrack.vetoedBy.reason || 'No reason given.')}`,
+      name: `🚫 VETOED (${vetoList.length}${scTrack.vetoRequiredCount ? `/${scTrack.vetoRequiredCount}` : ''} Permanent Members)`,
+      value: lines.join('\n').slice(0, 1024),
       inline: false,
     });
   }
@@ -252,10 +261,22 @@ function trackEmbed(resolution, body, track) {
   }
 
   if (track.vetoEnabled) {
-    embed.addFields({ name: '🚫 VETO POWER', value: 'Permanent Security Council Members may veto using the button below.', inline: false });
+    const required = track.vetoRequiredCount || 3;
+    embed.addFields({
+      name: '🚫 VETO POWER',
+      value: `Permanent Security Council Members may veto using the button below.\n**${required}** of them must each cast a veto for it to take effect.`,
+      inline: false,
+    });
   }
-  if (track.vetoedBy) {
-    embed.addFields({ name: '🚫 VETOED BY', value: `<@${track.vetoedBy.id}>${track.vetoedBy.reason ? ` — ${track.vetoedBy.reason}` : ''}`, inline: false });
+  const vetoes = track.vetoes || (track.vetoedBy ? [track.vetoedBy] : []);
+  if (vetoes.length) {
+    const required = track.vetoRequiredCount || 3;
+    const met = vetoes.length >= required;
+    embed.addFields({
+      name: met ? '🚫 VETOED BY' : `🚫 VETOES CAST (${vetoes.length}/${required})`,
+      value: vetoes.map((v) => `<@${v.id}>${v.reason ? ` — ${v.reason}` : ''}`).join('\n'),
+      inline: false,
+    });
   }
 
   return embed;
@@ -308,6 +329,15 @@ function amendmentEmbed(resolution, amendment) {
         { name: '✅ YES', value: `**${weightedYes}** weighted (**${yesPercent}%**)`, inline: true },
         { name: '❌ NO', value: `**${weightedNo}** weighted (**${noPercent}%**)`, inline: true },
         { name: '⚪ ABSTAIN', value: `**${weightedAbstain}** weighted (**${abstainPercent}%**)`, inline: true }
+      );
+    } else if (closed) {
+      // Same reasoning as the final resolution result: once an anonymous
+      // vote is closed, the final For/Against/Abstain percentages are still
+      // shown - only the exact weighted counts behind them stay hidden.
+      embed.addFields(
+        { name: '✅ YES', value: `**${yesPercent}%**`, inline: true },
+        { name: '❌ NO', value: `**${noPercent}%**`, inline: true },
+        { name: '⚪ ABSTAIN', value: `**${abstainPercent}%**`, inline: true }
       );
     }
   }

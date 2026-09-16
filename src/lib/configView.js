@@ -140,6 +140,7 @@ function buildSecurityCouncilEmbed(config) {
         name: '🚫 VETO SETTINGS',
         value: [
           `Enabled: ${toggle(sc.veto.enabled)}`,
+          `Required Vetoes: **${sc.veto.requiredVetoes}** Permanent Member(s)`,
           `Immediately Ends Vote: ${toggle(sc.veto.immediatelyTerminates)}`,
           `Allow Override: ${toggle(sc.veto.allowOverride)}`,
           `Override Threshold: ${sc.veto.overrideThresholdPercent}%`,

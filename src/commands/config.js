@@ -123,6 +123,7 @@ module.exports = {
               { name: 'SC Supermajority %', value: 'securityCouncil.supermajorityPercent' },
               { name: 'SC Debate duration (minutes)', value: 'securityCouncil.debateDurationMinutes' },
               { name: 'SC Voting duration (minutes)', value: 'securityCouncil.votingDurationMinutes' },
+              { name: 'Required Vetoes (Permanent Members needed)', value: 'securityCouncil.veto.requiredVetoes' },
               { name: 'Veto Override Threshold %', value: 'securityCouncil.veto.overrideThresholdPercent' },
               { name: 'Veto Override Voting duration (minutes)', value: 'securityCouncil.veto.overrideVotingDurationMinutes' },
               { name: 'Amendment Quorum %', value: 'amendments.quorumPercent' },
@@ -410,7 +411,10 @@ module.exports = {
 
     if (sub === 'set-number' || sub === 'set-election-number') {
       const key = interaction.options.getString('key');
-      const value = interaction.options.getNumber('value');
+      let value = interaction.options.getNumber('value');
+      if (key === 'securityCouncil.veto.requiredVetoes') {
+        value = Math.max(1, Math.round(value));
+      }
       setValue(key, value);
       return interaction.reply({ content: `✅ Set **${key}** to **${value}**.`, ephemeral: true });
     }

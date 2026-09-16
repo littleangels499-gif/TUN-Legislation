@@ -643,9 +643,20 @@ client.on('interactionCreate', async (interaction) => {
         if (!isSCPermanentMember(interaction.member, config)) {
           return interaction.reply({ content: '❌ Only Permanent Security Council Members may cast a veto.', ephemeral: true });
         }
-        await interaction.reply({ content: `🚫 You have cast a veto on **${resolution.number}**.`, ephemeral: true });
-        castVeto(client, resolution, interaction.member, null).catch((err) => console.error('Failed to process veto:', err));
-        return;
+        await interaction.deferReply({ ephemeral: true });
+        const result = await castVeto(client, resolution, interaction.member, null).catch((err) => {
+          console.error('Failed to process veto:', err);
+          return { status: 'error' };
+        });
+        const messages = {
+          already_vetoed: `🚫 **${resolution.number}** has already been vetoed (${result.count}/${result.required} Permanent Members).`,
+          duplicate: `You have already cast a veto on **${resolution.number}** (${result.count}/${result.required} Permanent Members so far).`,
+          recorded: `🚫 Your veto on **${resolution.number}** has been recorded (${result.count}/${result.required} Permanent Members needed). It will not take effect until enough other Permanent Members also veto it.`,
+          vetoed: `🚫 **${resolution.number}** has been vetoed — ${result.count}/${result.required} Permanent Members have now vetoed it.`,
+          closed: '❌ There is no open Security Council vote on this resolution.',
+          error: '❌ Something went wrong recording your veto. Please try again or use `/veto cast`.',
+        };
+        return interaction.editReply({ content: messages[result.status] || '🚫 Your veto has been cast.' });
       }
 
       // --- Yes / No / Abstain ---

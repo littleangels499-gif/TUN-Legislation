@@ -62,15 +62,24 @@ module.exports = {
       }
       const reason = interaction.options.getString('reason');
 
-      await interaction.reply({ content: `🚫 You have cast a veto on **${resolution.number}**.`, ephemeral: true });
-      castVeto(interaction.client, resolution, interaction.member, reason).catch((err) => console.error('Failed to process veto:', err));
-      return;
+      await interaction.deferReply({ ephemeral: true });
+      const result = await castVeto(interaction.client, resolution, interaction.member, reason);
+
+      const messages = {
+        already_vetoed: `🚫 **${resolution.number}** has already been vetoed (${result.count}/${result.required} Permanent Members).`,
+        duplicate: `You have already cast a veto on **${resolution.number}** (${result.count}/${result.required} Permanent Members so far).`,
+        recorded: `🚫 Your veto on **${resolution.number}** has been recorded (${result.count}/${result.required} Permanent Members needed). It will not take effect until enough other Permanent Members also veto it.`,
+        vetoed: `🚫 **${resolution.number}** has been vetoed — ${result.count}/${result.required} Permanent Members have now vetoed it.`,
+        closed: '❌ There is no open Security Council vote on this resolution.',
+      };
+      return interaction.editReply({ content: messages[result.status] || '🚫 Your veto has been cast.' });
     }
 
     if (sub === 'status') {
       const scTrack = resolution.tracks && resolution.tracks.SC;
-      if (!scTrack || !scTrack.vetoedBy) {
-        return interaction.reply({ content: `**${resolution.number}** has not been vetoed.`, ephemeral: true });
+      const vetoes = scTrack ? scTrack.vetoes || (scTrack.vetoedBy ? [scTrack.vetoedBy] : []) : [];
+      if (vetoes.length === 0) {
+        return interaction.reply({ content: `**${resolution.number}** has not had any vetoes cast on it.`, ephemeral: true });
       }
       return interaction.reply({ embeds: [resolutionEmbed(resolution)], ephemeral: true });
     }

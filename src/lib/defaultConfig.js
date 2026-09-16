@@ -109,6 +109,7 @@ function getDefaultConfig() {
       veto: {
         enabled: true,
         immediatelyTerminates: true,
+        requiredVetoes: 3,
         allowOverride: false,
         overrideThresholdPercent: 66.7,
         overrideVotingDurationMinutes: 1440,

@@ -40,6 +40,11 @@ function getTrackSettings(body, config, template, vetoableOverride) {
       requiresSupermajority: !!template.requiresSupermajority,
       votingDurationMinutes: sc.votingDurationMinutes,
       vetoEnabled: !!(sc.veto.enabled && vetoable),
+      // How many DIFFERENT Permanent Members must each cast a veto before
+      // the resolution actually counts as vetoed. Captured onto the track
+      // at open time (like quorum/threshold) so a later config change
+      // doesn't retroactively change the rules of a vote already in progress.
+      vetoRequiredCount: Math.max(1, Math.round(sc.veto.requiredVetoes) || 1),
     };
   }
   if (body === 'OVERRIDE') {
@@ -305,7 +310,8 @@ async function openTrackVote(client, resolution, body) {
     endsAt: Date.now() + settings.votingDurationMinutes * 60000,
     closed: false,
     result: null,
-    vetoedBy: null,
+    vetoes: [],
+    vetoRequiredCount: settings.vetoRequiredCount || 3,
     channelId: null,
     messageId: null,
   };
@@ -385,13 +391,20 @@ function tallyTrack(track) {
   };
 }
 
+// True once enough different Permanent Members have each cast a veto on
+// this track (see securityCouncil.veto.requiredVetoes) - a single veto is
+// only ever enough if requiredVetoes is configured as 1.
+function isVetoThresholdMet(track) {
+  return !!(track.vetoes && track.vetoes.length >= (track.vetoRequiredCount || 1));
+}
+
 async function closeTrackVote(client, resolution, body) {
   const track = resolution.tracks[body];
   if (!track || track.closed) return;
 
   const tally = tallyTrack(track);
   let result;
-  if (track.vetoedBy) {
+  if (isVetoThresholdMet(track)) {
     result = 'Vetoed';
   } else if (tally.participation < track.quorumPercent) {
     result = 'Failed';
@@ -459,19 +472,54 @@ async function closeVoting(client, resolution, body = null) {
 }
 
 // A Permanent Security Council Member clicked the Veto button (or used
-// /veto cast).
+// /veto cast). Vetoing now requires `requiredVetoes` DIFFERENT Permanent
+// Members to each cast one before the resolution is actually vetoed - one
+// member's veto alone just records their vote and waits for the others.
+// Returns a status object the caller uses to build an accurate reply:
+//   { status: 'already_vetoed' | 'recorded' | 'vetoed', count, required }
 async function castVeto(client, resolution, member, reason) {
   const config = getConfig();
   const track = resolution.tracks.SC;
-  if (!track || track.closed) return;
+  if (!track || track.closed) return { status: 'closed' };
 
-  track.vetoedBy = {
+  const required = track.vetoRequiredCount || config.securityCouncil.veto.requiredVetoes || 3;
+
+  if (isVetoThresholdMet(track)) {
+    // Threshold was already reached (e.g. by another member, or this track
+    // is still open because immediatelyTerminates is off) - nothing more to do.
+    return { status: 'already_vetoed', count: track.vetoes.length, required };
+  }
+
+  if (track.vetoes.some((v) => v.id === member.id)) {
+    return { status: 'duplicate', count: track.vetoes.length, required };
+  }
+
+  track.vetoes.push({
     id: member.id,
     tag: member.user ? member.user.tag : member.tag,
     reason: reason || null,
     timestamp: Date.now(),
-  };
+  });
 
+  const count = track.vetoes.length;
+  const thresholdReached = count >= required;
+
+  if (!thresholdReached) {
+    // Not enough Permanent Members have vetoed yet - just record it and
+    // update the voting card to show the new count, without terminating
+    // the vote or alarming the proposer over a single veto.
+    upsertResolution(resolution);
+    await refreshTrackMessage(client, resolution, 'SC');
+    await logAudit(
+      client,
+      'Veto Cast',
+      `**${resolution.number}** — Veto cast by ${member.user ? member.user.tag : member.tag} (${count}/${required} needed)${reason ? `\nReason: ${reason}` : ''}`,
+      resolution.body
+    );
+    return { status: 'recorded', count, required };
+  }
+
+  // Threshold reached - this resolution is now actually vetoed.
   if (config.securityCouncil.veto.immediatelyTerminates) {
     track.closed = true;
     track.result = 'Vetoed';
@@ -492,14 +540,17 @@ async function castVeto(client, resolution, member, reason) {
     await refreshTrackMessage(client, resolution, 'SC');
   }
 
+  const vetoerTags = track.vetoes.map((v) => v.tag).join(', ');
   await logAudit(
     client,
     'Veto Cast',
-    `**${resolution.number}** — Vetoed by ${track.vetoedBy.tag}${reason ? `\nReason: ${reason}` : ''}`,
+    `**${resolution.number}** — Vetoed (${count}/${required} Permanent Members: ${vetoerTags})`,
     resolution.body
   );
-  await notify(client, `🚫 **${resolution.number}** has been vetoed by a Permanent Security Council Member.`, resolution.body);
-  dmUser(client, resolution.submittedBy, `🚫 Your resolution **${resolution.number}** — ${resolution.title} has been vetoed by a Permanent Security Council Member.${reason ? ` Reason: ${reason}` : ''}`);
+  await notify(client, `🚫 **${resolution.number}** has been vetoed by ${count} Permanent Security Council Members.`, resolution.body);
+  dmUser(client, resolution.submittedBy, `🚫 Your resolution **${resolution.number}** — ${resolution.title} has been vetoed by ${count} Permanent Security Council Members.`);
+
+  return { status: 'vetoed', count, required };
 }
 
 async function openOverrideVote(client, resolution) {
@@ -558,6 +609,7 @@ module.exports = {
   openVoting,
   closeVoting,
   castVeto,
+  isVetoThresholdMet,
   openOverrideVote,
   closeOverrideVote,
 };
