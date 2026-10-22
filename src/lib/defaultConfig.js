@@ -51,6 +51,13 @@ function getDefaultConfig() {
       votingDurationMinutes: 360,
       quorumPercent: 50,
       majorityPercent: 50,
+      // New: every amendment first needs the resolution owner's OK, then a
+      // reviewer's OK, before its debate and vote begin.
+      requireOwnerApproval: true,
+      requireReview: true,
+      ownerDecisionMinutes: 1440, // owner has 24h to accept/reject, else it expires (0 = no limit)
+      reviewDecisionMinutes: 1440, // reviewers have 24h, else it expires (0 = no limit)
+      maxOpenPerMember: 2, // open amendments one member may have per resolution (0 = unlimited)
     },
     resolutionNumbering: {
       prefix: 'UNGA',

@@ -20,7 +20,8 @@ const {
 
 const { getConfig } = require('./lib/config');
 const { initializeDataFiles } = require('./lib/storage');
-const { isEligibleVoter, isSCMember, isSCPermanentMember, isAdmin, getVoteWeight } = require('./lib/permissions');
+const { isEligibleVoter, isSCMember, isSCPermanentMember, isAdmin, isReviewer, getVoteWeight } = require('./lib/permissions');
+const amendmentChecks = require('./lib/amendmentChecks');
 const { findTemplate, findResolution, getAllResolutions, getAllTemplates, upsertResolution, getActiveResolutionsByMember, EDITABLE_STATUSES, SELF_DELETABLE_STATUSES } = require('./lib/resolutions');
 const { nextResolutionNumber } = require('./lib/numbering');
 const { resolutionEmbed, amendmentEmbed } = require('./lib/embeds');
@@ -30,7 +31,9 @@ const {
   AMENDMENT_TYPE_LABELS,
   AMENDMENT_TYPE_MODAL_CONFIG,
   isAmendmentEligibleVoter,
-  createAmendment,
+  submitAmendment,
+  ownerDecide,
+  reviewDecide,
   refreshAmendmentMessage,
 } = require('./lib/amendments');
 const { startScheduler } = require('./lib/scheduler');
@@ -160,7 +163,9 @@ client.on('interactionCreate', async (interaction) => {
 
         if (sub === 'vote-start') amendments = amendments.filter((a) => a.status === 'Debate');
         else if (sub === 'vote-close') amendments = amendments.filter((a) => a.status === 'Voting');
-        else if (sub === 'withdraw') amendments = amendments.filter((a) => a.status === 'Debate' || a.status === 'Voting');
+        else if (sub === 'withdraw') amendments = amendments.filter(amendmentChecks.isOpen);
+        else if (sub === 'decide') amendments = amendments.filter((a) => ['Pending Owner', 'Under Review', 'Debate'].includes(a.status));
+        else if (sub === 'review') amendments = amendments.filter((a) => a.status === 'Under Review');
 
         const query = focused.value.toLowerCase();
         amendments = amendments.filter(
@@ -259,6 +264,8 @@ client.on('interactionCreate', async (interaction) => {
       else if (cmd === 'vote' && sub === 'close') list = list.filter((r) => r.status === 'Voting');
       else if (cmd === 'veto') list = list.filter((r) => r.tracks && r.tracks.SC);
       else if (cmd === 'amendment' && sub === 'propose') list = list.filter((r) => r.status === 'Debate');
+      else if (cmd === 'amendment' && sub === 'decide') list = list.filter((r) => (r.amendments || []).some((a) => ['Pending Owner', 'Under Review', 'Debate'].includes(a.status)));
+      else if (cmd === 'amendment' && sub === 'review') list = list.filter((r) => (r.amendments || []).some((a) => a.status === 'Under Review'));
       else if (cmd === 'resolution' && sub === 'edit') list = list.filter((r) => EDITABLE_STATUSES.includes(r.status));
       else if (cmd === 'resolution' && sub === 'delete') list = list.filter((r) => SELF_DELETABLE_STATUSES.includes(r.status));
       // /resolution view, /resolution admin-delete, and /amendment list/vote-start/vote-close/withdraw: no extra filter here.
@@ -472,8 +479,9 @@ client.on('interactionCreate', async (interaction) => {
       const targetField = interaction.values[0];
 
       const resolution = findResolution(resolutionNumber);
-      if (!resolution || resolution.status !== 'Debate') {
-        return interaction.update({ content: '❌ This resolution is no longer in debate; the amendment cannot be proposed.', components: [] });
+      const windowProblem = resolution ? amendmentChecks.validateWindow(resolution) : 'This resolution no longer exists.';
+      if (windowProblem) {
+        return interaction.update({ content: `❌ ${windowProblem}`, components: [] });
       }
 
       return interaction.showModal(buildAmendmentModal(type, targetField, resolutionNumber));
@@ -488,41 +496,33 @@ client.on('interactionCreate', async (interaction) => {
       const resolutionNumber = decodeURIComponent(rawNumber);
 
       const resolution = findResolution(resolutionNumber);
-      if (!resolution || resolution.status !== 'Debate') {
-        return interaction.reply({ content: '❌ This resolution is no longer in debate; the amendment cannot be submitted.', ephemeral: true });
+      if (!resolution) {
+        return interaction.reply({ content: '❌ This resolution no longer exists.', ephemeral: true });
       }
 
+      const config = getConfig();
       const originalText = interaction.fields.getTextInputValue('original_text').trim() || null;
       const newText = interaction.fields.getTextInputValue('new_text').trim() || null;
 
-      const amendment = createAmendment(resolution, { type, targetField, originalText, newText, sponsorId: interaction.user.id });
+      // Duplicate / conflict / sanity checks - the member sees exactly why
+      // it was refused, and nothing is created.
+      const problem = amendmentChecks.validateProposal(resolution, { type, targetField, originalText, newText, sponsorId: interaction.user.id }, config);
+      if (problem) {
+        return interaction.reply({ content: `❌ Amendment not submitted: ${problem}`, ephemeral: true });
+      }
 
-      await interaction.reply({
-        content: `✅ Amendment **${amendment.id}** (${AMENDMENT_TYPE_LABELS[type]} → ${targetField}) proposed on **${resolution.number}**. Debate on it closes <t:${Math.floor(amendment.debate.endsAt / 1000)}:f>, after which voting opens automatically.`,
-        ephemeral: true,
+      await interaction.deferReply({ ephemeral: true });
+      const amendment = await submitAmendment(client, resolution, { type, targetField, originalText, newText, sponsorId: interaction.user.id });
+
+      const next =
+        amendment.status === 'Pending Owner'
+          ? `It is now waiting for <@${resolution.submittedBy}> (the resolution owner) to accept or reject it — they have been pinged in the debate thread.`
+          : amendment.status === 'Under Review'
+            ? 'It is now with the reviewers.'
+            : `Debate on it closes <t:${Math.floor(amendment.debate.endsAt / 1000)}:f>, after which voting opens automatically.`;
+      return interaction.editReply({
+        content: `✅ Amendment **${amendment.id}** (${AMENDMENT_TYPE_LABELS[type]} → ${targetField}) proposed on **${resolution.number}**. ${next}`,
       });
-
-      const config = getConfig();
-      const targetChannelIds = getDebateTargetChannelIds(resolution, config);
-      for (const channelId of targetChannelIds) {
-        client.channels
-          .fetch(channelId)
-          .then(
-            (channel) =>
-              channel &&
-              channel.send({
-                content: `📝 A new amendment (**${amendment.id}**) has been proposed on **${resolution.number}** by ${interaction.user.tag}.`,
-                embeds: [amendmentEmbed(resolution, amendment)],
-              })
-          )
-          .catch((err) => console.error('Failed to post amendment to debate channel:', err));
-      }
-
-      logAudit(client, 'Amendment Proposed', `**${resolution.number}** ${amendment.id} (${AMENDMENT_TYPE_LABELS[type]} → ${targetField}) by ${interaction.user.tag}`, resolution.body).catch((err) => console.error(err));
-      if (resolution.submittedBy !== interaction.user.id) {
-        dmUser(client, resolution.submittedBy, `📝 A new amendment (${amendment.id}) has been proposed on your resolution **${resolution.number}**.`);
-      }
-      return;
     }
 
     // 6b) Member submitted the /resolution edit form -> apply the changes
@@ -581,6 +581,41 @@ client.on('interactionCreate', async (interaction) => {
         postToReviewChannels(client, resolution, config).catch((err) => console.error(err));
       }
       return;
+    }
+
+    // 6c) Owner clicked Accept/Reject, or a reviewer clicked Approve/Reject,
+    // on an amendment card. Button IDs: amendown_<id>_<accept|reject>_<number>
+    // and amendrev_<id>_<approve|reject>_<number>
+    if (interaction.isButton() && (interaction.customId.startsWith('amendown_') || interaction.customId.startsWith('amendrev_'))) {
+      const isOwnerButton = interaction.customId.startsWith('amendown_');
+      const parts = interaction.customId.split('_');
+      const amendmentId = parts[1];
+      const decision = parts[2];
+      const number = parts.slice(3).join('_');
+
+      const resolution = findResolution(number);
+      const amendment = resolution && (resolution.amendments || []).find((a) => a.id === amendmentId);
+      const config = getConfig();
+
+      if (!resolution || !amendment) {
+        return interaction.reply({ content: '❌ This amendment no longer exists.', ephemeral: true });
+      }
+
+      if (isOwnerButton) {
+        if (resolution.submittedBy !== interaction.user.id && !isAdmin(interaction.member, config)) {
+          return interaction.reply({ content: '❌ Only the resolution owner can accept or reject this amendment.', ephemeral: true });
+        }
+      } else if (!isReviewer(interaction.member, config, resolution.body)) {
+        return interaction.reply({ content: '❌ Only reviewers can approve or reject amendments.', ephemeral: true });
+      }
+
+      await interaction.deferReply({ ephemeral: true });
+      const actor = { id: interaction.user.id };
+      const outcome = isOwnerButton
+        ? await ownerDecide(client, resolution, amendment, actor, decision)
+        : await reviewDecide(client, resolution, amendment, actor, decision);
+      if (!outcome.ok) return interaction.editReply({ content: `❌ ${outcome.error}` });
+      return interaction.editReply({ content: `✅ Done — amendment **${amendment.id}**: ${decision}.` });
     }
 
     // 7) Member clicked Yes/No/Abstain on an amendment voting card

@@ -6,10 +6,11 @@
 
 const { SlashCommandBuilder, ActionRowBuilder, StringSelectMenuBuilder, EmbedBuilder } = require('discord.js');
 const { getConfig } = require('../lib/config');
-const { isAdmin, isSponsorEligible } = require('../lib/permissions');
-const { findResolution, upsertResolution } = require('../lib/resolutions');
+const { isAdmin, isReviewer, isSponsorEligible } = require('../lib/permissions');
+const { findResolution } = require('../lib/resolutions');
 const { resolutionEmbed } = require('../lib/embeds');
-const { AMENDMENT_TYPE_LABELS, openAmendmentVote, closeAmendmentVote } = require('../lib/amendments');
+const checks = require('../lib/amendmentChecks');
+const { AMENDMENT_TYPE_LABELS, openAmendmentVote, closeAmendmentVote, ownerDecide, reviewDecide, withdrawAmendment } = require('../lib/amendments');
 
 module.exports = {
   category: 'Amendments',
@@ -57,6 +58,36 @@ module.exports = {
     )
     .addSubcommand((sub) =>
       sub
+        .setName('decide')
+        .setDescription('Resolution owner: accept or reject an amendment to your resolution')
+        .addStringOption((o) => o.setName('number').setDescription('Resolution number').setRequired(true).setAutocomplete(true))
+        .addStringOption((o) => o.setName('amendment_id').setDescription('Amendment ID, e.g. A1').setRequired(true).setAutocomplete(true))
+        .addStringOption((o) =>
+          o
+            .setName('decision')
+            .setDescription('Your decision')
+            .setRequired(true)
+            .addChoices({ name: 'Accept', value: 'accept' }, { name: 'Reject', value: 'reject' })
+        )
+        .addStringOption((o) => o.setName('reason').setDescription('Optional reason, shown publicly').setRequired(false).setMaxLength(300))
+    )
+    .addSubcommand((sub) =>
+      sub
+        .setName('review')
+        .setDescription('Reviewer: approve or reject an amendment before it goes to debate')
+        .addStringOption((o) => o.setName('number').setDescription('Resolution number').setRequired(true).setAutocomplete(true))
+        .addStringOption((o) => o.setName('amendment_id').setDescription('Amendment ID, e.g. A1').setRequired(true).setAutocomplete(true))
+        .addStringOption((o) =>
+          o
+            .setName('decision')
+            .setDescription('Your decision')
+            .setRequired(true)
+            .addChoices({ name: 'Approve', value: 'approve' }, { name: 'Reject', value: 'reject' })
+        )
+        .addStringOption((o) => o.setName('reason').setDescription('Optional reason, shown publicly').setRequired(false).setMaxLength(300))
+    )
+    .addSubcommand((sub) =>
+      sub
         .setName('withdraw')
         .setDescription('Withdraw an amendment before its vote closes')
         .addStringOption((o) => o.setName('number').setDescription('Resolution number').setRequired(true).setAutocomplete(true))
@@ -77,11 +108,16 @@ module.exports = {
       if (!config.amendments.enabled) {
         return interaction.reply({ content: '❌ Amendments are currently disabled.', ephemeral: true });
       }
-      if (resolution.status !== 'Debate') {
-        return interaction.reply({ content: `❌ Amendments can only be proposed while a resolution is in Debate (status: ${resolution.status}).`, ephemeral: true });
+      const windowProblem = checks.validateWindow(resolution);
+      if (windowProblem) {
+        return interaction.reply({ content: `❌ ${windowProblem}`, ephemeral: true });
       }
       if (!isSponsorEligible(interaction.member, config)) {
         return interaction.reply({ content: '❌ You are not eligible to propose amendments.', ephemeral: true });
+      }
+      const limitProblem = checks.validateMemberLimit(resolution, interaction.user.id, config.amendments.maxOpenPerMember);
+      if (limitProblem) {
+        return interaction.reply({ content: `❌ ${limitProblem}`, ephemeral: true });
       }
 
       const type = interaction.options.getString('type');
@@ -147,19 +183,40 @@ module.exports = {
       return interaction.editReply({ content: `✅ Voting closed on amendment **${updated.id}**. Result: **${updated.status}**.` });
     }
 
+    if (sub === 'decide') {
+      const isOwner = resolution.submittedBy === interaction.user.id;
+      if (!isOwner && !isAdmin(interaction.member, config)) {
+        return interaction.reply({ content: '❌ Only the resolution owner (or an admin acting for them) can decide on this.', ephemeral: true });
+      }
+      await interaction.deferReply({ ephemeral: true });
+      const decision = interaction.options.getString('decision');
+      const reason = interaction.options.getString('reason');
+      const outcome = await ownerDecide(interaction.client, resolution, amendment, { id: interaction.user.id }, decision, reason);
+      if (!outcome.ok) return interaction.editReply({ content: `❌ ${outcome.error}` });
+      return interaction.editReply({ content: decision === 'accept' ? `✅ You accepted amendment **${amendment.id}**.` : `✅ You rejected amendment **${amendment.id}**.` });
+    }
+
+    if (sub === 'review') {
+      if (!isReviewer(interaction.member, config, resolution.body)) {
+        return interaction.reply({ content: '❌ Only reviewers can review amendments.', ephemeral: true });
+      }
+      await interaction.deferReply({ ephemeral: true });
+      const decision = interaction.options.getString('decision');
+      const reason = interaction.options.getString('reason');
+      const outcome = await reviewDecide(interaction.client, resolution, amendment, { id: interaction.user.id }, decision, reason);
+      if (!outcome.ok) return interaction.editReply({ content: `❌ ${outcome.error}` });
+      return interaction.editReply({ content: decision === 'approve' ? `✅ Amendment **${amendment.id}** approved — it now goes to debate.` : `✅ Amendment **${amendment.id}** rejected.` });
+    }
+
     if (sub === 'withdraw') {
       const canWithdraw = isAdmin(interaction.member, config) || amendment.sponsor === interaction.user.id;
       if (!canWithdraw) {
         return interaction.reply({ content: "❌ Only the amendment's sponsor or an admin can withdraw it.", ephemeral: true });
       }
-      if (amendment.status !== 'Debate' && amendment.status !== 'Voting') {
-        return interaction.reply({ content: `❌ This amendment can no longer be withdrawn (status: ${amendment.status}).`, ephemeral: true });
-      }
-      amendment.status = 'Withdrawn';
-      if (amendment.debate) amendment.debate.closed = true;
-      if (amendment.vote) amendment.vote.closed = true;
-      upsertResolution(resolution);
-      return interaction.reply({ content: `✅ Amendment **${amendment.id}** withdrawn.`, ephemeral: true });
+      await interaction.deferReply({ ephemeral: true });
+      const outcome = await withdrawAmendment(interaction.client, resolution, amendment, { id: interaction.user.id });
+      if (!outcome.ok) return interaction.editReply({ content: `❌ ${outcome.error}` });
+      return interaction.editReply({ content: `✅ Amendment **${amendment.id}** withdrawn.` });
     }
   },
 };

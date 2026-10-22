@@ -37,6 +37,12 @@ const STATUS_COLORS = {
   Certified: 0x2e8b57,
   Cancelled: 0xa33a3a,
   'Tied - Awaiting Manual Resolution': 0xb5651d,
+  // Amendment-only stages
+  'Pending Owner': 0xc9972c,
+  'Under Review': 0xc9972c,
+  'Rejected by Owner': 0xa33a3a,
+  Rejected: 0xa33a3a,
+  Void: 0x6b7280,
 };
 
 const STATUS_ICONS = {
@@ -59,6 +65,11 @@ const STATUS_ICONS = {
   Certified: '🟢',
   Cancelled: '🔴',
   'Tied - Awaiting Manual Resolution': '🟠',
+  'Pending Owner': '🟡',
+  'Under Review': '🟡',
+  'Rejected by Owner': '🔴',
+  Rejected: '🔴',
+  Void: '⚪',
 };
 
 const AMENDMENT_TYPE_LABELS = {
@@ -118,7 +129,14 @@ function resolutionEmbed(resolution) {
     .addFields(
       { name: 'STATUS', value: `${statusIcon} **${resolution.status.toUpperCase()}**`, inline: true },
       { name: 'BODY', value: bodyLabel(resolution.body), inline: true },
-      { name: 'SPONSORS', value: resolution.sponsors.length ? resolution.sponsors.map((s) => `<@${s}>`).join(', ') : '*None yet*', inline: true },
+      {
+        name: 'SPONSORS',
+        value:
+          (resolution.sponsors.length ? resolution.sponsors.map((s) => `<@${s}>`).join(', ') : '*None yet*') +
+          // Shown when an admin used /sponsor waive to skip the sponsor requirement.
+          (resolution.sponsorRequirementWaived ? `\n*Requirement waived by <@${resolution.sponsorRequirementWaived.by}>*` : ''),
+        inline: true,
+      },
       { name: BLANK, value: DIVIDER, inline: false }
     )
     .setFooter({ text: `Filed by ${resolution.submittedByTag}  ·  ${resolution.number}` })
@@ -294,7 +312,57 @@ function trackEmbed(resolution, body, track) {
   return embed;
 }
 
-// Renders the interactive voting card for a single amendment.
+const AMENDMENT_STAGE_LABELS = { proposed: 'Proposed', owner: 'Owner', review: 'Review', debate: 'Debate', vote: 'Vote' };
+const AMENDMENT_ACTIVE_STAGE = { 'Pending Owner': 'owner', 'Under Review': 'review', Debate: 'debate', Voting: 'vote' };
+
+// One-line progress tracker, e.g. "✅ Proposed › 🔵 Owner › ▫️ Review › ▫️ Debate › ▫️ Vote".
+function amendmentTracker(amendment) {
+  const flow = amendment.flow || { owner: false, review: false };
+  const order = ['proposed', ...(flow.owner ? ['owner'] : []), ...(flow.review ? ['review'] : []), 'debate', 'vote'];
+  const active = AMENDMENT_ACTIVE_STAGE[amendment.status];
+
+  let stopAt; // stage index where it is now (open) or where it ended (closed)
+  let outcome; // 'active' | 'passed' | 'stopped'
+  if (active) {
+    stopAt = order.indexOf(active);
+    outcome = 'active';
+  } else if (amendment.status === 'Approved') {
+    stopAt = order.length;
+    outcome = 'passed';
+  } else {
+    stopAt = order.indexOf(amendment.endedStage || (amendment.vote ? 'vote' : 'debate'));
+    if (stopAt < 0) stopAt = order.length - 1;
+    outcome = 'stopped';
+  }
+
+  return order
+    .map((stage, i) => {
+      let icon = '▫️';
+      if (i < stopAt) icon = '✅';
+      else if (i === stopAt) icon = outcome === 'active' ? '🔵' : '❌';
+      return `${icon} ${AMENDMENT_STAGE_LABELS[stage]}`;
+    })
+    .join(' › ');
+}
+
+// What the card says is happening right now / who it is waiting on.
+function amendmentWaitingLine(resolution, amendment) {
+  const ts = (ms) => `<t:${Math.floor(ms / 1000)}:R>`;
+  if (amendment.status === 'Pending Owner') {
+    const od = amendment.ownerDecision || {};
+    return `Waiting for <@${resolution.submittedBy}> (resolution owner) to accept or reject${od.endsAt ? ` — expires ${ts(od.endsAt)}` : ''}.`;
+  }
+  if (amendment.status === 'Under Review') {
+    const rv = amendment.review || {};
+    return `Waiting for a reviewer to approve or reject${rv.endsAt ? ` — expires ${ts(rv.endsAt)}` : ''}.`;
+  }
+  if (amendment.status === 'Debate' && amendment.debate) {
+    return `Open for debate — voting opens ${ts(amendment.debate.endsAt)}.`;
+  }
+  return null;
+}
+
+// Renders the card for a single amendment (stage tracker + voting card).
 function amendmentEmbed(resolution, amendment) {
   const vote = amendment.vote;
   const ballots = Object.values((vote && vote.ballots) || {});
@@ -312,21 +380,45 @@ function amendmentEmbed(resolution, amendment) {
   const eligibleCount = vote ? vote.eligibleCount : 0;
   const participation = eligibleCount > 0 ? ((votesCast / eligibleCount) * 100).toFixed(1) : '0.0';
   const closed = vote ? vote.closed : false;
-  const statusLabel = closed ? `${STATUS_ICONS[amendment.status] || '⚪'} **CLOSED — ${amendment.status.toUpperCase()}**` : `🔵 **${amendment.status.toUpperCase()}**`;
+  const finished = !AMENDMENT_ACTIVE_STAGE[amendment.status];
+  const statusLabel = finished
+    ? `${STATUS_ICONS[amendment.status] || '⚪'} **${amendment.status.toUpperCase()}**`
+    : `${STATUS_ICONS[amendment.status] || '🔵'} **${amendment.status.toUpperCase()}**`;
 
   const embed = new EmbedBuilder()
     .setAuthor({ name: letterhead(resolution.body, `PROPOSED AMENDMENT · ${(AMENDMENT_TYPE_LABELS[amendment.type] || amendment.type).toUpperCase()}`) })
     .setTitle(`Amendment ${amendment.id} to ${resolution.number}`)
     .setDescription(DIVIDER)
-    .setColor(closed ? STATUS_COLORS[amendment.status] || 0x2c3e50 : STATUS_COLORS.Debate)
+    .setColor(STATUS_COLORS[amendment.status] || 0x2f6fa3)
     .addFields(
       { name: 'TARGET FIELD', value: amendment.targetField, inline: true },
       { name: 'SPONSOR', value: `<@${amendment.sponsor}>`, inline: true },
       { name: 'STATUS', value: statusLabel, inline: true },
-      { name: BLANK, value: DIVIDER, inline: false },
-      { name: 'ORIGINAL TEXT', value: quoteBlock(amendment.originalText), inline: false },
-      { name: 'NEW TEXT', value: quoteBlock(amendment.newText), inline: false }
+      { name: 'PROGRESS', value: amendmentTracker(amendment), inline: false }
     );
+
+  const waiting = amendmentWaitingLine(resolution, amendment);
+  if (waiting) embed.addFields({ name: 'NEXT STEP', value: waiting, inline: false });
+
+  // Record of who decided what, kept on the card for transparency.
+  const decisions = [];
+  const od = amendment.ownerDecision;
+  if (od && od.decision) {
+    const who = od.auto ? 'proposed by the owner' : `<@${od.by}>${od.onBehalf ? ' (on the owner\'s behalf)' : ''}`;
+    decisions.push(`**Owner:** ${od.decision === 'accepted' ? 'accepted' : 'rejected'} — ${who}${od.reason ? ` — _${od.reason}_` : ''}`);
+  }
+  const rv = amendment.review;
+  if (rv && rv.decision) {
+    decisions.push(`**Review:** ${rv.decision} by <@${rv.by}>${rv.reason ? ` — _${rv.reason}_` : ''}`);
+  }
+  if (amendment.appliedNote) decisions.push(`_${amendment.appliedNote}_`);
+  if (decisions.length) embed.addFields({ name: 'DECISIONS', value: decisions.join('\n').slice(0, 1024), inline: false });
+
+  embed.addFields(
+    { name: BLANK, value: DIVIDER, inline: false },
+    { name: 'ORIGINAL TEXT', value: quoteBlock(amendment.originalText), inline: false },
+    { name: 'NEW TEXT', value: quoteBlock(amendment.newText), inline: false }
+  );
 
   if (vote) {
     const showBreakdown = shouldShowVoteBreakdown();

@@ -7,7 +7,7 @@
 
 const { getAllResolutions } = require('./resolutions');
 const { openVoting, closeVoting, closeOverrideVote } = require('./voting');
-const { openAmendmentVote, closeAmendmentVote, hasOpenAmendments } = require('./amendments');
+const { openAmendmentVote, closeAmendmentVote, expireAmendment, hasOpenAmendments } = require('./amendments');
 const { getAllElections } = require('./electionsData');
 const { openCampaign, openElectionVoting, closeElectionVoting } = require('./elections');
 const { runReminders } = require('./reminders');
@@ -22,7 +22,11 @@ function startScheduler(client) {
         // Advance any amendments whose debate or voting window has ended,
         // regardless of the resolution's own stage below.
         for (const amendment of resolution.amendments || []) {
-          if (amendment.status === 'Debate' && amendment.debate && !amendment.debate.closed && now >= amendment.debate.endsAt) {
+          if (amendment.status === 'Pending Owner' && amendment.ownerDecision && amendment.ownerDecision.endsAt && now >= amendment.ownerDecision.endsAt) {
+            await expireAmendment(client, resolution, amendment);
+          } else if (amendment.status === 'Under Review' && amendment.review && amendment.review.endsAt && now >= amendment.review.endsAt) {
+            await expireAmendment(client, resolution, amendment);
+          } else if (amendment.status === 'Debate' && amendment.debate && !amendment.debate.closed && now >= amendment.debate.endsAt) {
             amendment.debate.closed = true;
             await openAmendmentVote(client, resolution, amendment);
           } else if (amendment.status === 'Voting' && amendment.vote && !amendment.vote.closed && now >= amendment.vote.endsAt) {

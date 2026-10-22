@@ -162,6 +162,9 @@ function buildAmendmentsAnnouncementsEmbed(config) {
         name: 'AMENDMENTS',
         value: [
           `Enabled: ${toggle(a.enabled)}`,
+          `Owner approval required: ${toggle(a.requireOwnerApproval)}${a.requireOwnerApproval ? ` (${a.ownerDecisionMinutes ? formatDuration(a.ownerDecisionMinutes) : 'no time limit'})` : ''}`,
+          `Reviewer approval required: ${toggle(a.requireReview)}${a.requireReview ? ` (${a.reviewDecisionMinutes ? formatDuration(a.reviewDecisionMinutes) : 'no time limit'})` : ''}`,
+          `Max open per member: ${a.maxOpenPerMember || 'unlimited'}`,
           `Quorum: ${a.quorumPercent}%`,
           `Majority: ${a.majorityPercent}%`,
           `Debate Duration: ${formatDuration(a.debateDurationMinutes)}`,

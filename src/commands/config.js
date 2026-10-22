@@ -130,6 +130,9 @@ module.exports = {
               { name: 'Amendment Majority %', value: 'amendments.majorityPercent' },
               { name: 'Amendment Debate duration (minutes)', value: 'amendments.debateDurationMinutes' },
               { name: 'Amendment Voting duration (minutes)', value: 'amendments.votingDurationMinutes' },
+              { name: 'Amendment Owner Decision window (minutes, 0 = none)', value: 'amendments.ownerDecisionMinutes' },
+              { name: 'Amendment Review window (minutes, 0 = none)', value: 'amendments.reviewDecisionMinutes' },
+              { name: 'Max Open Amendments Per Member (0 = unlimited)', value: 'amendments.maxOpenPerMember' },
               { name: 'Voting Reminder Interval (hours)', value: 'reminders.intervalHours' }
             )
         )
@@ -174,6 +177,8 @@ module.exports = {
               { name: 'Veto Immediately Ends Vote', value: 'securityCouncil.veto.immediatelyTerminates' },
               { name: 'Allow Veto Override', value: 'securityCouncil.veto.allowOverride' },
               { name: 'Amendments Enabled', value: 'amendments.enabled' },
+              { name: 'Amendments Need Owner Approval', value: 'amendments.requireOwnerApproval' },
+              { name: 'Amendments Need Reviewer Approval', value: 'amendments.requireReview' },
               { name: 'Announcement Mentions Enabled', value: 'announcements.mentionsEnabled' },
               { name: 'Voting Reminders Enabled (DMs non-voters on open votes)', value: 'reminders.enabled' },
               { name: 'Election Vote Changes Allowed', value: 'elections.allowVoteChanges' },
