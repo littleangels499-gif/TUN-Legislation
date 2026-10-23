@@ -36,7 +36,6 @@ You already have Node v24, so you're set. Just confirm in a terminal:
 ```
 node -v
 ```
-
 ## Step 2 — Download this folder
 
 Save this whole `tun-legislation-bot` folder somewhere on your computer, e.g.
