@@ -29,6 +29,7 @@ back and we'll add these the same way, one module at a time.
 
 ---
 
+
 ## Step 1 — Install Node.js
 
 You already have Node v24, so you're set. Just confirm in a terminal:
